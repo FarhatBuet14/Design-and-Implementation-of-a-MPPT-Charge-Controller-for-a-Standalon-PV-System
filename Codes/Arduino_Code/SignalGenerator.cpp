@@ -1,0 +1,113 @@
+#ifndef SIGNALGENERATOR_cpp
+#define SIGNALGENERATOR_cpp
+
+#include "SignalGenerator.h"
+
+Timerone timer1;  //preinitiate
+int sample = 0;
+bool channel = 0;
+
+ISR(TIMER1_COMPA_vect)          // interrupt service routine that wraps a user defined function supplied by attachInterrupt
+{
+  
+  switch(channel) // When compare match found, compare value will change here
+  {
+    case 0:
+          OCR1A  = pgm_read_byte(&sinewave[sample]);
+          OCR1B = 0;
+          //PORTB &=~(1<<PB0);
+          //PORTC =(1<<PC5);
+
+    
+        break;
+    case 1:
+          OCR1B = pgm_read_byte(&sinewave[sample]);
+          OCR1A = 0 ;
+          //PORTB =(1<<PB0);
+         // PORTC &=~(1<<PC5);
+
+        break;
+  }
+  sample++;
+  if (sample>=160)
+  {
+    sample=0;
+    channel ^=1;
+    //DDRB ^=1<<PB0;
+    //DDRC ^=(1<<PC5);
+//    DDRB ^=1<<PB1;
+//    DDRB ^=1<<PB2;    
+  }
+}
+
+
+void Timerone::initialize(long microseconds)
+{
+  TCCR1A = 0;                 // clear control register A 
+  TCCR1B = _BV(WGM13);        // set mode 8: phase and frequency correct pwm, stop the timer
+  setPeriod(microseconds);
+}
+
+void Timerone::setPeriod(long microseconds)
+{
+  long cycles = (F_CPU / 2000000) * microseconds;                                // the counter runs backwards after TOP, interrupt is at BOTTOM so divide microseconds by 2
+  if(cycles < RESOLUTION)              clockSelectBits = _BV(CS10);              // no prescale, full xtal
+  else if((cycles >>= 3) < RESOLUTION) clockSelectBits = _BV(CS11);              // prescale by /8
+  else if((cycles >>= 3) < RESOLUTION) clockSelectBits = _BV(CS11) | _BV(CS10);  // prescale by /64
+  else if((cycles >>= 2) < RESOLUTION) clockSelectBits = _BV(CS12);              // prescale by /256
+  else if((cycles >>= 2) < RESOLUTION) clockSelectBits = _BV(CS12) | _BV(CS10);  // prescale by /1024
+  else        cycles = RESOLUTION - 1, clockSelectBits = _BV(CS12) | _BV(CS10);  // request was out of bounds, set as maximum
+  
+  oldSREG = SREG;        
+  cli();              // Disable interrupts for 16 bit register access
+  ICR1 = pwmPeriod = cycles;                                          // ICR1 is TOP in p & f correct pwm mode
+  SREG = oldSREG;
+  
+  TCCR1B &= ~(_BV(CS10) | _BV(CS11) | _BV(CS12));
+  TCCR1B |= clockSelectBits;  
+}
+
+void Timerone::setPwmDuty(char pin, int duty)
+{
+  unsigned long dutyCycle = pwmPeriod;
+  
+  dutyCycle *= duty;
+  dutyCycle >>= 10;
+  
+  oldSREG = SREG;
+  cli();
+  if(pin == 1 || pin == 9)       OCR1A = dutyCycle;
+  else if(pin == 2 || pin == 10) OCR1B = dutyCycle;
+  SREG = oldSREG;
+}
+
+
+void Timerone::pwm(char pin, int duty, long microseconds)  // expects duty cycle to be 10 bit (1024)
+{
+  if(microseconds > 0) setPeriod(microseconds);
+  if(pin == 1 || pin == 9) {
+    DDRB |= _BV(PORTB1);                                   // sets data direction register for pwm output pin
+    TCCR1A |= _BV(COM1A1);                                 // activates the output pin
+  }
+  else if(pin == 2 || pin == 10) {
+    DDRB |= _BV(PORTB2);
+    TCCR1A |= _BV(COM1B1);
+  }
+  setPwmDuty(pin, duty);
+  resume();      // Lex - make sure the clock is running.  We don't want to restart the count, in case we are starting the second WGM
+          // and the first one is in the middle of a cycle
+}
+
+void Timerone::resume()        // AR suggested
+{ 
+  TCCR1B |= clockSelectBits;
+}
+
+void Timerone::attachInterrupt()
+{
+  sei();        //global interrupt enable
+  TIMSK1 |= 1<<OCIE1A; //Timer/Counter1, Output Compare A Match Interrupt Enable
+}
+
+
+#endif
